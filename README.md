@@ -32,3 +32,8 @@ make certs
 ```bash
 make success-run
 ```
+
+3. Collects evidence for the baseline success run
+```bash
+make evidence
+```

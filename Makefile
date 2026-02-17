@@ -1,8 +1,12 @@
-.PHONY: regen certs success-run clean root intermediate server client
+.PHONY: regen certs success-run clean root intermediate server client evidence
 
 regen: clean root intermediate server client
 
 certs: root intermediate server client
+
+evidence:
+	chmod +x scripts/collect-evidence.sh
+	./scripts/collect-evidence.sh
 
 success-run: certs
 	chmod +x client/curl.sh
