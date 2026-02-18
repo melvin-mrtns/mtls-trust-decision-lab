@@ -76,8 +76,8 @@ run_sh "cert_server_san_eku_ku.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/se
 run_sh "cert_client_san_eku_ku.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/client/client.crt -noout -text | egrep -n 'Subject Alternative Name|Extended Key Usage|Key Usage|Basic Constraints' -A2"
 
 # Verifier-style checks (evidence collectors)
-run_sh "verify_server_as_sslserver.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -purpose sslserver certs/server/server.crt || true"
-run_sh "verify_client_as_sslclient.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -purpose sslclient certs/client/client.crt || true"
+run_sh "verify_server_as_sslserver.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -untrusted certs/intermediate/intermediate.crt -purpose sslserver certs/server/server.crt || true"
+run_sh "verify_client_as_sslclient.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -untrusted certs/intermediate/intermediate.crt -purpose sslclient certs/client/client.crt || true"
 
 # Handshake capture from the client side
 run_sh "curl_verbose.txt" "cd '$ROOT_DIR' && ./client/curl.sh || true"
