@@ -66,6 +66,7 @@ server: intermediate
 	  -out certs/server/server.crt \
 	  -extfile certs/server/server.ext \
 	  -extensions v3_server
+	cat certs/server/server.crt certs/intermediate/intermediate.crt > certs/server/server.fullchain.crt
 
 client: intermediate
 	openssl genrsa -out certs/client/client.key 2048
