@@ -2,7 +2,24 @@
 
 The Trust Decision Graph is a formal model of how a verifier evaluates trust in ordered steps.\
 It consumes defined inputs and produces either an accept or reject decision, terminating at the first failing condition.
+---
+**Verifier:** \
+The verifier is the component that evaluates certificate trust and produces an accept or reject decision.  
+In this lab:
+- Nginx acts as the verifier for client authentication (server-side decision).
+- curl (using the local CA bundle) acts as the verifier for server certificate validation (client-side decision).
+---
+**Scope:**  
+This trust decision graph models the ordered trust decision executed by a verifier during TLS/mTLS handshake.  
+It describes how a verifier evaluates inputs (certificates, trust store, hostname, time, policy configuration) and reaches an accept or reject decision.  
+It does not model application logic, authorization, business rules, or network routing.
+---
 
+## Graph
+
+![Graph description](../diagrams/trust-decision-graph.jpg)
+
+---
 
 ### Step 1: Time validity
 
@@ -49,8 +66,17 @@ It consumes defined inputs and produces either an accept or reject decision, ter
 **Evidence:** openssl verify -purpose sslclient|sslserver\
 **Minimal fix:** correct EKU/KU in leaf profile
 
-### Step 6: Client cert presence
+### Step 6: Peer cert presence
 
+**Step 6A: Server cert presence**\
+**Inputs:** server sends certificate or not\
+**Decision:** was a server certificate presented during handshake\
+**Failure signal:** handshake fails early, openssl s_client output "no peer certificate available"\
+**Archetype:** MissingServerCertFailure\
+**Evidence:** openssl s_client, curl verbose transcript\
+**Minimal fix:** fix server TLS config to present a certificate
+
+**Step 6B: Client cert presence**\
 **Inputs:** client sends certificate or not, nginx ssl_verify_client\
 **Decision:** was a client certificate presented when required\
 **Failure signal:** “no required SSL certificate was sent”\
