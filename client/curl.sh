@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-DIR="$(dirname "$0")"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CERTS_DIR="$ROOT_DIR/certs"
 
 # Present client leaf + intermediate so nginx can build the chain to the trusted root.
 curl -v \
-  --cacert "$DIR/../certs/ca/root.crt" \
-  --cert   <(cat "$DIR/../certs/client/client.crt" "$DIR/../certs/intermediate/intermediate.crt") \
-  --key  "$DIR/../certs/client/client.key" \
+  --cacert "$CERTS_DIR/ca/root.crt" \
+  --cert   <(cat "$CERTS_DIR/client/client.crt" "$CERTS_DIR/intermediate/intermediate.crt") \
+  --key  "$CERTS_DIR/client/client.key" \
   https://localhost:8443/
 
