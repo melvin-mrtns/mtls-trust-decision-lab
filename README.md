@@ -33,7 +33,9 @@ make certs
 make success-run
 ```
 
-3. Collects evidence for the baseline success run
+## How to run failure cases
+
+1. Running the system without presenting a client certificate:
 ```bash
-make evidence
+make fail-run CASE=MissingClientCertFailure
 ```

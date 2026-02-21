@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-echo "Stopping existing containers..."
-docker compose down -v
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CERTS_DIR="$ROOT_DIR/certs"
 
-echo "Starting containers..."
-docker compose up -d
+# Present client leaf + intermediate so nginx can build the chain to the trusted root.
+curl -v \
+  --cacert "$CERTS_DIR/ca/root.crt" \
+  --cert   <(cat "$CERTS_DIR/client/client.crt" "$CERTS_DIR/intermediate/intermediate.crt") \
+  --key  "$CERTS_DIR/client/client.key" \
+  https://localhost:8443/
 
-echo "Waiting for services to be ready..."
-sleep 5
-
-echo "Running curl test..."
-"$(dirname "$0")/curl.sh"

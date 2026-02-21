@@ -1,4 +1,4 @@
-.PHONY: regen certs success-run clean root intermediate server client evidence
+.PHONY: regen certs success-run clean root intermediate server client evidence fail-run
 
 regen: clean root intermediate server client
 
@@ -6,12 +6,19 @@ certs: root intermediate server client
 
 evidence:
 	chmod +x scripts/collect-evidence.sh
-	./scripts/collect-evidence.sh
+	./scripts/collect-evidence.sh $(CASE)
+
+fail-run:
+	chmod +x client/docker-run.sh
+	chmod +x failure-cases/$(CASE)/run.sh
+	./client/docker-run.sh
+	$(MAKE) evidence CASE=$(CASE)
 
 success-run: certs
-	chmod +x client/curl.sh
+	chmod +x client/docker-run.sh
 	chmod +x client/success-run.sh
-	./client/success-run.sh
+	./client/docker-run.sh
+	$(MAKE) evidence
 
 clean:
 	rm -f certs/root/*.crt certs/root/*.key certs/root/*.srl certs/root/*.csr
