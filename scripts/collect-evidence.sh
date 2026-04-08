@@ -2,161 +2,263 @@
 set -euo pipefail
 
 # Usage:
-#   ./scripts/collect-evidence.sh (Collects evidence for the baseline success run)
-#   ./scripts/collect-evidence.sh FailureCase (Collects evidence for a failure run)
+#   collect-evidence.sh <RUN_START_UTC> <OUT_DIR> <VERIFIER_CMD_FILE> <COMPOSE_DIR>
 #
-# Output:
-#   evidence/<RUN_ID>/...  (timestamped bundle)
+# - Collect enough evidence to classify the following failure cases with high confidence:
+#   - MissingClientCertificateCase
+#   - CertificateVerifySignatureMismatchCase
+#   - MissingIntermediateCase
+#   - WrongTrustAnchorCase / UntrustedSelfSignedLeafCase
+#   - ExpiredCertificateCase / NotYetValidCertificateCase
+#   - ExtendedKeyUsageConstraintCase / BasicConstraintsViolationCase
+#   - DnsSanMismatchCase
 #
-# This script does not modify configuration or certificates.
-# It triggers exactly one handshake (success or a named failure) and captures evidence around that run.
 
-CASE_NAME="${1:-baseline-success}"
+if [[ $# -ne 4 ]]; then
+  echo "Usage: $0 <RUN_START_UTC> <OUT_DIR> <VERIFIER_CMD_FILE> <COMPOSE_DIR>" >&2
+  exit 1
+fi
+
+RUN_START_UTC="$1"
+OUT="$2"
+CMD_FILE="$3"
+COMPOSE_DIR="$4"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FAIL_DIR="$ROOT_DIR/failure-cases/$CASE_NAME"
-EVIDENCE_DIR="$ROOT_DIR/evidence"
-RUN_START_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-RUN_ID="${CASE_NAME}-$(date -u +"%Y%m%dT%H%M%SZ")"
-OUT="$EVIDENCE_DIR/$RUN_ID"
 
-mkdir -p "$OUT"
-mkdir -p "$OUT/metadata"
-mkdir -p "$OUT/environment"
-mkdir -p "$OUT/system"
-mkdir -p "$OUT/verifier"
-mkdir -p "$OUT/client"
-mkdir -p "$OUT/certs"
-mkdir -p "$OUT/network"
+if [[ "$COMPOSE_DIR" == "$ROOT_DIR" ]]; then
+  COMPOSE_FILE="docker-compose.yml"
+else
+  COMPOSE_FILE="case-docker-compose.yml"
+fi
 
-# Helper: run a command, capture stdout+stderr, preserve exit code in a .rc file
+COMPOSE_CMD="cd '$COMPOSE_DIR' && docker compose -f '$COMPOSE_FILE'"
+
+mkdir -p "$OUT"/{environment,system,server,inputs,certs,metadata}
+
 run() {
-  local name="$1"; shift
-  local file="$OUT/$name"
+  local rel="$1"; shift
+  local file="$OUT/$rel"
+  mkdir -p "$(dirname "$file")"
   {
     echo "\$ $*"
     "$@"
-  } >"$file" 2>&1 || echo "$?" >"$file.rc"
+  } >"$file" 2>&1 || true
 }
 
-# Helper: run a shell pipeline (for cases where pipes/redirection are needed)
 run_sh() {
-  local name="$1"; shift
-  local file="$OUT/$name"
+  local rel="$1"; shift
+  local file="$OUT/$rel"
+  mkdir -p "$(dirname "$file")"
   {
     echo "\$ $*"
     bash -lc "$*"
-  } >"$file" 2>&1 || echo "$?" >"$file.rc"
+  } >"$file" 2>&1 || true
 }
 
-echo "Collecting evidence into: $OUT"
-echo "$RUN_ID" > "$OUT/metadata/run_id.txt"
-echo "$CASE_NAME" > "$OUT/metadata/case_name.txt"
-date -u > "$OUT/metadata/utc_time.txt"
+VERIFIER_CMD_RAW="$(cat "$CMD_FILE")"
+printf "%s\n" "$VERIFIER_CMD_RAW" > "$OUT/metadata/verifier_cmd.raw.txt"
 
-# Basic environment context
-run "environment/uname.txt" uname -a
-run "environment/docker_version.txt" docker version
-run "environment/compose_version.txt" docker compose version
-run "environment/openssl_version.txt" openssl version -a
+# Parse verifier command
+CACERT=""
+CERT=""
+KEY=""
+URL=""
 
-# Compose state
-run_sh "system/compose_ps.txt" "cd '$ROOT_DIR' && docker compose ps"
-run_sh "system/compose_config_resolved.yml" "cd '$ROOT_DIR' && docker compose config"
+# Turn newlines/backslashes into spaces for token parsing
+CMD_ONELINE="$(printf "%s" "$VERIFIER_CMD_RAW" | tr '\n' ' ' | tr -d '\\')"
 
-# Handshake capture from the client side
-if [[ "$CASE_NAME" == "baseline-success" ]]; then
-  run_sh "client/curl_verbose.txt" "cd '$ROOT_DIR' && ./client/success-run.sh"
-else
-  FAIL_RUNNER="$FAIL_DIR/run.sh"
-  run_sh "client/curl_verbose.txt" "cd '$ROOT_DIR' && '$FAIL_RUNNER'"
+# Turns command into a bash array by splitting on whitespace
+# shellcheck disable=SC2206
+TOKENS=( $CMD_ONELINE )
+
+# Extract decision inputs from the command
+for ((i=0; i<${#TOKENS[@]}; i++)); do
+  t="${TOKENS[$i]}"
+  case "$t" in
+    --cacert) CACERT="${TOKENS[$((i+1))]:-}" ;;
+    --cert)   CERT="${TOKENS[$((i+1))]:-}" ;;
+    --key)    KEY="${TOKENS[$((i+1))]:-}" ;;
+    http://*|https://*) URL="$t" ;;
+  esac
+done
+
+# Remove quotes from parsed variable to facilitate parsing
+strip_quotes() {
+  local s="$1"
+  s="${s#\"}"; s="${s%\"}"
+  s="${s#\'}"; s="${s%\'}"
+  printf "%s" "$s"
+}
+
+CACERT="$(strip_quotes "$CACERT")"
+CERT="$(strip_quotes "$CERT")"
+KEY="$(strip_quotes "$KEY")"
+URL="$(strip_quotes "$URL")"
+
+# Extract host from URL if present
+HOST=""
+if [[ -n "$URL" ]]; then
+  HOST="$URL"
+  HOST="${HOST#http://}"
+  HOST="${HOST#https://}"
+  HOST="${HOST%%/*}"
+  HOST="${HOST%%:*}"
 fi
 
-# Output Handshake result in the terminal
-echo "Handshake result:"
-if grep -q "OK - mTLS handshake succeeded" "$OUT/client/curl_verbose.txt"; then
-  echo "OK - mTLS handshake succeeded"
-elif grep -q "No required SSL certificate was sent" "$OUT/client/curl_verbose.txt"; then
-  echo "No required SSL certificate was sent"
-else
-  # fallback: show HTTP status line if present, otherwise last 5 lines
-  grep -E "^< HTTP/" "$OUT/client/curl_verbose.txt" | tail -n 1 || tail -n 5 "$OUT/client/curl_verbose.txt" || true
-fi
-
-# Nginx config as seen inside the verifier container
-run_sh "verifier/nginx_T.txt" "cd '$ROOT_DIR' && docker compose exec -T nginx nginx -T"
-
-# Logs (Decision outputs from the verifier)
-run_sh "verifier/nginx_logs.txt" "cd '$ROOT_DIR' && docker compose logs --no-color --since '$RUN_START_UTC' nginx"
-run_sh "verifier/flask_logs.txt" "cd '$ROOT_DIR' && docker compose logs --no-color --since '$RUN_START_UTC' flask"
-
-# Connectivity checks (proves upstream is reachable from the network)
-run_sh "network/dns_from_nginx_getent_hosts_flask.txt" "cd '$ROOT_DIR' && docker compose exec -T nginx sh -lc 'getent hosts flask || true'"
-run_sh "network/tcp_from_nginx_to_flask_5000.txt" "cd '$ROOT_DIR' && docker compose exec -T nginx sh -lc 'nc -zv flask 5000 || true'"
-
-# Certificate inspection (inputs to the decision graph)
-run_sh "certs/root_subject_issuer.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/root/root.crt -noout -subject -issuer -dates"
-run_sh "certs/intermediate_subject_issuer.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/intermediate/intermediate.crt -noout -subject -issuer -dates"
-run_sh "certs/server_subject_issuer.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/server/server.crt -noout -subject -issuer -dates"
-run_sh "certs/client_subject_issuer.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/client/client.crt -noout -subject -issuer -dates"
-
-# Extract SAN + EKU/KU in a consistent way
-run_sh "certs/server_san_eku_ku.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/server/server.crt -noout -text | egrep -n 'Subject Alternative Name|Extended Key Usage|Key Usage|Basic Constraints' -A2"
-run_sh "certs/client_san_eku_ku.txt" "cd '$ROOT_DIR' && openssl x509 -in certs/client/client.crt -noout -text | egrep -n 'Subject Alternative Name|Extended Key Usage|Key Usage|Basic Constraints' -A2"
-
-# Verifier-style checks (evidence collectors)
-run_sh "certs/verify_server_as_sslserver.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -untrusted certs/intermediate/intermediate.crt -purpose sslserver certs/server/server.crt || true"
-run_sh "certs/verify_client_as_sslclient.txt" "cd '$ROOT_DIR' && openssl verify -CAfile certs/ca/root.crt -untrusted certs/intermediate/intermediate.crt -purpose sslclient certs/client/client.crt || true"
-
-# openssl s_client transcript
-if [[ "$CASE_NAME" == "baseline-success" ]]; then
-  run_sh "openssl_s_client.txt" "cd '$ROOT_DIR' && openssl s_client -connect localhost:8443 -servername localhost -showcerts -CAfile certs/ca/root.crt -cert certs/client/client.crt -key certs/client/client.key </dev/null || true"
-elif [[ "$CASE_NAME" == "MissingClientCertFailure" ]]; then
-  run_sh "openssl_s_client.txt" "cd '$ROOT_DIR' && openssl s_client -connect localhost:8443 -servername localhost -showcerts -CAfile certs/ca/root.crt </dev/null || true"
-fi
-
-# Summary stub
-cat > "$OUT/summary.txt" <<EOF
-Case: $CASE_NAME
-Run:  $RUN_ID
-Time: $(cat "$OUT/metadata/utc_time.txt")
-
-- Run metadata (what was collected, when):
-  - run_id.txt
-  - case_name.txt
-  - utc_time.txt
-
-- Environment context (so outputs are reproducible):
-  - env_*.txt
-
-- System state (what was running, from which compose):
-  - compose_ps.txt
-  - compose_config_resolved.yml
-
-- Verifier config (policy + enforcement inputs actually in effect):
-  - nginx_T.txt
-
-- Verifier outputs (decision outputs observed from the verifier):
-  - nginx_logs.txt
-  - flask_logs.txt
-
-- Reachability checks (proves nginx can resolve and connect to the Flask service):
-  - dns_from_nginx_getent_hosts_flask.txt
-  - tcp_from_nginx_to_flask_5000.txt
-
-- Certificate inputs (what identities and issuers were used):
-  - cert_*.txt
-
-- Verifier-style cert validation checks (purpose/path checks as evidence):
-  - verify_server_as_sslserver.txt
-  - verify_client_as_sslclient.txt
-
-- Client transcript (proves what was presented + handshake/HTTP outcome):
-  - curl_verbose.txt
-  - openssl_s_client.txt
-
-- Exit code (if any command failed):
-  - *.rc
+cat > "$OUT/metadata/verifier_inputs.parsed.txt" <<EOF
+cacert=$CACERT
+cert=$CERT
+key=$KEY
+url=$URL
+host=$HOST
 EOF
 
-echo "Done: $OUT"
+# Environment snapshots
+run "environment/host_time_utc.txt" date -u
+run "environment/uname.txt" uname -a
+run "environment/openssl_version.txt" openssl version -a
+
+# System snapshots
+run_sh "system/compose_ps.txt" "$COMPOSE_CMD ps"
+run_sh "system/compose_config.yml" "$COMPOSE_CMD config"
+
+# Verifier snapshots (nginx)
+run_sh "server/nginx_T.txt" "$COMPOSE_CMD exec -T nginx nginx -T"
+run_sh "server/nginx_V.txt" "$COMPOSE_CMD exec -T nginx nginx -V 2>&1"
+run_sh "server/nginx_time_utc.txt" "$COMPOSE_CMD exec -T nginx sh -lc 'date -u'"
+
+# Snapshot container logs since run start (decision outputs)
+run_sh "server/nginx_container_logs_since_run.txt" "$COMPOSE_CMD logs --no-color --since '$RUN_START_UTC' nginx"
+run_sh "server/flask_container_logs_since_run.txt" "$COMPOSE_CMD logs --no-color --since '$RUN_START_UTC' flask"
+run_sh "server/error.log" "$COMPOSE_CMD exec -T nginx sh -lc 'cat /var/log/nginx/error.log 2>/dev/null || true'"
+
+# Discover nginx TLS directive paths from nginx -T output
+NGINX_T="$OUT/server/nginx_T.txt"
+
+# Extract first-match helper
+extract_first() {
+  local directive="$1"
+  awk -v d="$directive" '
+    $1==d {gsub(/;/,"",$2); print $2; exit}
+  ' "$NGINX_T"
+}
+
+# Extract all matches helper
+extract_all() {
+  local directive="$1"
+  awk -v d="$directive" '
+    $1==d {gsub(/;/,"",$2); print $2}
+  ' "$NGINX_T"
+}
+
+SSL_CLIENT_CERTIFICATE="$(extract_first ssl_client_certificate)"
+SSL_TRUSTED_CERTIFICATE="$(extract_first ssl_trusted_certificate)"
+
+# Ensure all ssl certs are extracted
+mapfile -t SSL_CERTS < <(extract_all ssl_certificate)
+mapfile -t SSL_KEYS  < <(extract_all ssl_certificate_key)
+
+cat > "$OUT/metadata/nginx_tls_paths.txt" <<EOF
+ssl_client_certificate=$SSL_CLIENT_CERTIFICATE
+ssl_trusted_certificate=$SSL_TRUSTED_CERTIFICATE
+ssl_certificate=$(printf "%s\n" "${SSL_CERTS[@]}")
+ssl_certificate_key=$(printf "%s\n" "${SSL_KEYS[@]}")
+EOF
+
+# Copy nginx-referenced cert/trust files from the container
+mkdir -p "$OUT/inputs/nginx"
+
+# Copy file out of container and records sha256 hash for that path
+copy_from_container_if_set() {
+  local path="$1"
+  local dst="$2"
+  [[ -z "$path" ]] && return 0
+  bash -lc "$COMPOSE_CMD cp 'nginx:$path' '$dst'" >/dev/null 2>&1 || true
+  run_sh "${dst#$OUT/}.sha256.txt" \
+  "$COMPOSE_CMD exec -T nginx sh -lc \"sha256sum '$path' 2>/dev/null || true\""
+}
+
+copy_from_container_if_set "$SSL_CLIENT_CERTIFICATE" "$OUT/inputs/nginx/ssl_client_certificate.crt"
+copy_from_container_if_set "$SSL_TRUSTED_CERTIFICATE" "$OUT/inputs/nginx/ssl_trusted_certificate.crt"
+
+# Server Certificate FullChain (or leaf only based on nginx configuration)
+mkdir -p "$OUT/inputs/server"
+if [[ -n "${SSL_CERTS[0]}" ]]; then
+  bash -lc "$COMPOSE_CMD cp 'nginx:${SSL_CERTS[0]}' '$OUT/inputs/server/fullchain.crt'" \
+    >/dev/null 2>&1 || true
+  run_sh "inputs/server/fullchain.crt.sha256.txt" \
+    "$COMPOSE_CMD exec -T nginx sh -lc \"sha256sum '${SSL_CERTS[0]}' 2>/dev/null || true\""
+fi
+
+# Copy client-side inputs
+mkdir -p "$OUT/inputs/client"
+if [[ -n "$CACERT" && -f "$CACERT" ]]; then
+  cp -f "$CACERT" "$OUT/inputs/client/cacert.crt"
+  run_sh "inputs/client/cacert.sha256.txt" "sha256sum '$CACERT' 2>/dev/null || true"
+fi
+if [[ -n "$CERT" && -f "$CERT" ]]; then
+  cp -f "$CERT" "$OUT/inputs/client/cert.crt"
+  run_sh "inputs/client/cert.sha256.txt" "sha256sum '$CERT' 2>/dev/null || true"
+fi
+if [[ -n "$KEY" && -f "$KEY" ]]; then
+  # NOT a copy of private key; Just compute public key hash
+  run_sh "inputs/client/key.pubkey_sha256.txt" "openssl pkey -in '$KEY' -pubout 2>/dev/null | sha256sum || true"
+fi
+
+# Certificate cert fields
+mkdir -p "$OUT/certs/fields"
+
+cert_fields() {
+  local cert_path="$1"
+  local out_rel="$2"
+  [[ ! -f "$cert_path" ]] && return 0
+
+  {
+    echo "## file=$cert_path"
+    openssl x509 -in "$cert_path" -noout -subject -issuer -serial -dates -fingerprint -sha256 2>/dev/null || true
+    echo
+    echo "## SAN / EKU / KU / BasicConstraints (best-effort)"
+    openssl x509 -in "$cert_path" -noout -text 2>/dev/null | \
+      awk '
+        /X509v3 Subject Alternative Name/ {p=1}
+        /X509v3 Extended Key Usage/ {p=1}
+        /X509v3 Key Usage/ {p=1}
+        /X509v3 Basic Constraints/ {p=1}
+        p==1 {print}
+        /^[[:space:]]*X509v3/ && $0 !~ /(Subject Alternative Name|Extended Key Usage|Key Usage|Basic Constraints)/ {p=0}
+      ' || true
+  } > "$OUT/$out_rel" 2>&1 || true
+}
+
+# Client cert fields
+if [[ -f "$OUT/inputs/client/cert.crt" ]]; then
+  cert_fields "$OUT/inputs/client/cert.crt" "certs/fields/client_cert.txt"
+fi
+
+# CA cert fields
+if [[ -f "$OUT/inputs/client/cacert.crt" ]]; then
+  cert_fields "$OUT/inputs/client/cacert.crt" "certs/fields/client_cacert.txt"
+fi
+
+# Nginx trust store cert fields (server-side trust for client certs)
+if [[ -n "$SSL_CLIENT_CERTIFICATE" ]]; then
+  # Extract directly from container since copy may fail
+  bash -lc "$COMPOSE_CMD exec -T nginx sh -lc \"openssl x509 -in '$SSL_CLIENT_CERTIFICATE' -noout -subject -issuer -serial -dates -fingerprint -sha256 2>/dev/null || true\"" > "$OUT/certs/fields/nginx_ssl_client_certificate.txt" 2>&1 || true
+fi
+
+# Nginx presented server cert fields (extract from first ssl_certificate path)
+if [[ -n "${SSL_CERTS[0]}" ]]; then
+  # Extract directly from container
+  bash -lc "$COMPOSE_CMD exec -T nginx sh -lc \"openssl x509 -in '${SSL_CERTS[0]}' -noout -subject -issuer -serial -dates -fingerprint -sha256 2>/dev/null || true\"" > "$OUT/certs/fields/server_cert.txt" 2>&1 || true
+  # Also get SAN/EKU/KU/BasicConstraints
+  bash -lc "$COMPOSE_CMD exec -T nginx sh -lc \"openssl x509 -in '${SSL_CERTS[0]}' -noout -text 2>/dev/null | grep -A2 -E 'X509v3 (Subject Alternative Name|Extended Key Usage|Key Usage|Basic Constraints)' || true\"" >> "$OUT/certs/fields/server_cert.txt" 2>&1 || true
+fi
+
+# Wrong-key detection support (cert pubkey hash vs key pubkey hash)
+if [[ -f "$OUT/inputs/client/cert.crt" ]]; then
+  run_sh "inputs/client/cert.pubkey_sha256.txt" \
+    "openssl x509 -in '$OUT/inputs/client/cert.crt' -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform PEM 2>/dev/null | sha256sum || true"
+fi
+
+echo "Evidence collected into $OUT"

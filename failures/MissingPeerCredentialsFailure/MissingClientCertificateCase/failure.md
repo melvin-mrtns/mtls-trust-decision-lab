@@ -1,4 +1,4 @@
-# MissingClientCertFailure
+# MissingClientCertificateCase
 
 ## Failing step
 Step 6B: Client cert presence
@@ -27,7 +27,7 @@ Why this fails deterministically:
 ## Evidence
 
 Evidence bundle is created by:
-./scripts/collect-evidence.sh MissingClientCertFailure
+./scripts/collect-evidence.sh MissingClientCertificateCase
 
 This proves Step 6B failed:
 - curl_verbose.txt
