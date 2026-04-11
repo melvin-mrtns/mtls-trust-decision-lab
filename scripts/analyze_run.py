@@ -774,7 +774,7 @@ def analyze(out_dir: Path) -> Dict[str, Any]:
         detect_extended_key_usage_constraint_case,
         detect_basic_constraints_violation_case,
 
-        # Step 7 — Identity Binding
+        # Step 7, Identity Binding
         detect_dns_san_mismatch_case,
     ]
 
@@ -821,7 +821,7 @@ def format_result_text(result: Dict[str, Any]) -> str:
     if result.get("decision_step"):
         step = result["decision_step"]
         step_block = (
-            f"Step:          {step['step_id']} — {step['step_name']}\n"
+            f"Step:          {step['step_id']}, {step['step_name']}\n"
             f"Decision:      {step['decision']}\n"
             f"Failing input: {result.get('failing_input', '')}\n"
         )
