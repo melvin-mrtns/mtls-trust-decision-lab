@@ -15,7 +15,7 @@ maps to a specific step failing on a specific input.
 
 The verifier consumes inputs from three layers:
 
-![Three-Layer Input Model](diagrams/ThreeLayerInputModel.jpg)
+![Three-Layer Input Model](../diagrams/ThreeLayerInputModel.jpg)
 
 **Peer-Supplied Layer**:
 What the peer sends over the wire during the handshake:
@@ -85,7 +85,7 @@ soft-fails any step doesn't produce any trust decision at all for that step.
 
 Every verification attempt produces exactly one result.
 
-![State Grid](diagrams/StateGrid.jpg)
+![State Grid](../diagrams/StateGrid.jpg)
 
 **Clean Accept** (`status=ACCEPT`, `warning=false`):\
 All seven steps passed. The connection succeeded with full identity assurance.
