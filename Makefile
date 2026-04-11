@@ -46,6 +46,7 @@ fix-runlogs-perms:
 
 clean:
 	rm -r evidence/
+	rm -r runlogs/
 	rm -f certs/root/*.crt certs/root/*.key certs/root/*.srl certs/root/*.csr
 	rm -f certs/ca/*.crt
 	rm -f certs/intermediate/*.crt certs/intermediate/*.key certs/intermediate/*.csr certs/intermediate/*.srl
@@ -58,7 +59,6 @@ clean:
 	rm -f failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.crt failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.key failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.srl failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.csr
 	rm -f failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.crt failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.key failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.srl failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.csr
 	rm -f failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.crt failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.key failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.srl failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.csr
-
 
 root:
 	openssl genrsa -out certs/root/root.key 4096
