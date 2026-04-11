@@ -1,0 +1,30 @@
+services:
+  flask:
+    restart: unless-stopped
+    image: python:3.11-slim
+    volumes:
+      - ../../../app:/app
+    working_dir: /app
+    command: sh -lc "pip install --no-cache-dir flask==3.1.2 && python app.py"
+
+  nginx:
+    restart: unless-stopped
+    image: nginx:stable
+    ports:
+      - "8443:8443"
+    environment:
+      - DOCKER_UID=${DOCKER_UID}
+      - DOCKER_GID=${DOCKER_GID}
+    command: >
+      sh -lc "
+        chown -R ${DOCKER_UID}:${DOCKER_GID} /var/log/nginx 2>/dev/null || true;
+        exec nginx -g 'daemon off;'
+      "
+    volumes:
+      - ./case-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../../runlogs/nginx:/var/log/nginx
+      - ./wrong_root.crt:/etc/nginx/certs/ca/wrong_root.crt:ro
+      - ../../../certs/server.fullchain.crt:/etc/nginx/certs/server/server.fullchain.crt:ro
+      - ../../../certs/server.key:/etc/nginx/certs/server/server.key:ro
+    depends_on:
+      - flask
