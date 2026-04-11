@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   flask:
     restart: unless-stopped
@@ -14,6 +12,13 @@ services:
     image: nginx:stable
     ports:
       - "8443:8443"
+    environment:
+      - DOCKER_UID=${DOCKER_UID}
+      - DOCKER_GID=${DOCKER_GID}
+    command: sh -lc "
+      chown -R ${DOCKER_UID}:${DOCKER_GID} /var/log/nginx;
+      exec nginx -g 'daemon off;'"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./runlogs/nginx:/var/log/nginx
