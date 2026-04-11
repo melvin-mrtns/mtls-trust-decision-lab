@@ -1,31 +1,64 @@
-.PHONY: regen certs success-run clean root intermediate server client evidence fail-run
+.PHONY: regen certs success-run clean root intermediate server client fail-run restart all
+
+# Ensure bind-mounted log files are writable by the current host user
+DOCKER_UID := $(shell id -u)
+DOCKER_GID := $(shell id -g)
+export DOCKER_UID
+export DOCKER_GID
 
 regen: clean root intermediate server client
 
 certs: root intermediate server client
 
-evidence:
+all: certs restart
+	$(MAKE) _fail-run ARCHETYPE=MissingPeerCredentialsFailure CASE=MissingClientCertificateCase
+	$(MAKE) _fail-run ARCHETYPE=PrivateKeyProofFailure CASE=CertificateVerifySignatureMismatchCase
+	$(MAKE) _fail-run ARCHETYPE=IncompleteChainFailure CASE=MissingIntermediateCase
+	$(MAKE) _fail-run ARCHETYPE=TrustAnchorResolutionFailure CASE=WrongTrustAnchorCase
+	$(MAKE) _fail-run ARCHETYPE=TrustAnchorResolutionFailure CASE=UntrustedSelfSignedLeafCase
+	$(MAKE) _fail-run ARCHETYPE=ValidityWindowFailure CASE=ExpiredCertificateCase
+	$(MAKE) _fail-run ARCHETYPE=ValidityWindowFailure CASE=NotYetValidCertificateCase
+	$(MAKE) _fail-run ARCHETYPE=UsageConstraintFailure CASE=ExtendedKeyUsageConstraintCase
+	$(MAKE) _fail-run ARCHETYPE=UsageConstraintFailure CASE=BasicConstraintsViolationCase
+	$(MAKE) _fail-run ARCHETYPE=SubjectIdentityMismatchFailure CASE=DnsSanMismatchCase
+
+restart:
+	chmod +x scripts/docker-run.sh
 	chmod +x scripts/collect-evidence.sh
-	./scripts/collect-evidence.sh $(CASE)
+	chmod +x scripts/analyze_run.py
+	./scripts/docker-run.sh
 
-fail-run:
-	chmod +x client/docker-run.sh
-	chmod +x failure-cases/$(CASE)/run.sh
-	./client/docker-run.sh
-	$(MAKE) evidence CASE=$(CASE)
+# Internal target: Run a single failure without regenerating the certs
+_fail-run: fix-runlogs-perms
+	chmod +x failures/$(ARCHETYPE)/$(CASE)/run.sh
+	./failures/$(ARCHETYPE)/$(CASE)/run.sh
 
-success-run: certs
-	chmod +x client/docker-run.sh
-	chmod +x client/success-run.sh
-	./client/docker-run.sh
-	$(MAKE) evidence
+# Public target: regenerate certs and restart before running the failure
+fail-run: certs restart fix-runlogs-perms
+	$(MAKE) _fail-run ARCHETYPE=$(ARCHETYPE) CASE=$(CASE)
+
+success-run: certs restart fix-runlogs-perms
+	chmod +x success/run.sh
+	./success/run.sh
+
+fix-runlogs-perms:
+	- docker compose -f docker-compose.yml exec -T nginx sh -lc 'chown -R $(DOCKER_UID):$(DOCKER_GID) /var/log/nginx 2>/dev/null || true'
 
 clean:
+	rm -r evidence/
 	rm -f certs/root/*.crt certs/root/*.key certs/root/*.srl certs/root/*.csr
 	rm -f certs/ca/*.crt
 	rm -f certs/intermediate/*.crt certs/intermediate/*.key certs/intermediate/*.csr certs/intermediate/*.srl
 	rm -f certs/server/*.crt certs/server/*.key certs/server/*.csr certs/server/*.srl
 	rm -f certs/client/*.crt certs/client/*.key certs/client/*.csr certs/client/*.srl
+	rm -f failures/PrivateKeyProofFailure/CertificateVerifySignatureMismatchCase/wrong_client.key
+	rm -f failures/ValidityWindowFailure/ExpiredCertificateCase/*.crt failures/ValidityWindowFailure/ExpiredCertificateCase/*.key failures/ValidityWindowFailure/ExpiredCertificateCase/*.srl failures/ValidityWindowFailure/ExpiredCertificateCase/*.csr
+	rm -f failures/ValidityWindowFailure/NotYetValidCertificateCase/*.crt failures/ValidityWindowFailure/NotYetValidCertificateCase/*.key failures/ValidityWindowFailure/NotYetValidCertificateCase/*.srl failures/ValidityWindowFailure/NotYetValidCertificateCase/*.csr
+	rm -f failures/UsageConstraintFailure/ExtendedKeyUsageConstraintCase/*.crt failures/UsageConstraintFailure/ExtendedKeyUsageConstraintCase/*.key failures/UsageConstraintFailure/ExtendedKeyUsageConstraintCase/*.srl failures/UsageConstraintFailure/ExtendedKeyUsageConstraintCase/*.csr
+	rm -f failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.crt failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.key failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.srl failures/UsageConstraintFailure/BasicConstraintsViolationCase/*.csr
+	rm -f failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.crt failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.key failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.srl failures/TrustAnchorResolutionFailure/UntrustedSelfSignedLeafCase/*.csr
+	rm -f failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.crt failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.key failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.srl failures/TrustAnchorResolutionFailure/WrongTrustAnchorCase/*.csr
+
 
 root:
 	openssl genrsa -out certs/root/root.key 4096
@@ -90,3 +123,4 @@ client: intermediate
 	  -out certs/client/client.crt \
 	  -extfile certs/client/client.ext \
 	  -extensions v3_client
+	cat certs/client/client.crt certs/intermediate/intermediate.crt > certs/client/client.fullchain.crt
